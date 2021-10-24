@@ -448,7 +448,7 @@ def cs2dada_multipass(basename, indir, outdir, mem_lim_gb=32.0):
                             source_name=src)
 
     # Figure out the number of samples per file per chunk
-    Nsamp_per_chunk = int( 0.75 * 10**9 * mem_lim_gb / (8 * nchan) )
+    Nsamp_per_chunk = int( 0.5 * 0.75 * 10**9 * mem_lim_gb / (8 * nchan) )
 
     # How many steps to read all the data?
     nsteps = int( np.ceil( Nt_total / Nsamp_per_chunk ) )
@@ -615,8 +615,8 @@ def cs2fil_multipass(basename, cs_dir, dada_dir, fil_dir, dm, nchan,
     t2 = time.time()
 
     # Clean up by removing dada file
-    #if os.path.exists(fil_file) and os.path.exists(dada_file):
-    #    os.remove(dada_file)
+    if os.path.exists(fil_file) and os.path.exists(dada_file):
+        os.remove(dada_file)
 
     print("")
     print("Convert to DADA -- %.1f sec" %(t1 - t0))
