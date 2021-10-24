@@ -577,8 +577,8 @@ def cs2fil(basename, cs_dir, dada_dir, fil_dir, dm, nchan,
     t2 = time.time()
 
     # Clean up by removing dada file
-    #if os.path.exists(fil_file) and os.path.exists(dada_file):
-    #    os.remove(dada_file)
+    if os.path.exists(fil_file) and os.path.exists(dada_file):
+        os.remove(dada_file)
 
     print("")
     print("Convert to DADA -- %.1f sec" %(t1 - t0))
@@ -615,8 +615,8 @@ def cs2fil_multipass(basename, cs_dir, dada_dir, fil_dir, dm, nchan,
     t2 = time.time()
 
     # Clean up by removing dada file
-    if os.path.exists(fil_file) and os.path.exists(dada_file):
-        os.remove(dada_file)
+    #if os.path.exists(fil_file) and os.path.exists(dada_file):
+    #    os.remove(dada_file)
 
     print("")
     print("Convert to DADA -- %.1f sec" %(t1 - t0))
