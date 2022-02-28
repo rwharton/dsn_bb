@@ -132,6 +132,7 @@ def check_and_sort_files(infiles, reverse=False):
     tstarts = np.array([ hd['tstart'] for hd in hdlist ])
     srcs = np.array([ hd['source_name'] for hd in hdlist ])
     dsizes = np.array([ hd['data_bytes'] for hd in hdlist ])
+    nbits = np.array([ hd['nbits'] for hd in hdlist ])
 
     # check consistency
     err = 0 
@@ -157,6 +158,11 @@ def check_and_sort_files(infiles, reverse=False):
         print("Multiple data sizes")
         print(dsizes)
         err += 1
+    
+    if len( np.unique(nbits) ) > 1:
+        print("Multiple data bit values")
+        print(nbits)
+        err += 1
 
     if err:
         print("Files incompatible")
@@ -179,58 +185,80 @@ def check_and_sort_files(infiles, reverse=False):
     bw  = bws[0]
     tstart = tstarts[0]
     dsize = dsizes[0]
+    nbit = nbits[0]
 
-    return filesort, freqsort, src, bw, tstart, dsize
+    return filesort, freqsort, src, bw, tstart, dsize, nbit
      
 
-def read_cs(infile, start=0, count=-1, hdr_size=None):
+def read_cs(infile, start=0, count=-1):
     """
-    Read complex voltage data (64-bit complex values)
+    Read complex voltage data
 
     start = sample number to start at
 
     count = number of samples to read after start
-
-    hdr_size = size of header in bytes, if None, read 
-               from SIGPROC header
-    
-    codd header is 249, cs is 316
     """
-    if hdr_size is None:
-        _, hsize, _ = fb.read_header(infile, 4, fb.fmtdict)
-        hdr_size = hsize
-    else: pass 
-
+    # Get header info
+    hd, hsize, err = fb.read_header(infile, 4, fb.fmtdict)
+    hdr_size = hsize
+   
+    # Get bit size and set dtype
+    nbits = hd['nbits']
+    if nbits == 8:
+        dtype = 'int8'
+    elif nbits == 32:
+        dtype = 'float32'
+    else:
+        print("Only supports nbits of 8 or 32")
+        print("nbits = %d invalid" %(nbits))
+        return
+   
     # Offset in bytes
-    offset = hdr_size + (start * 8)
+    offset = hdr_size + (start * 2 * (nbits//8))
+
+    # Samples to read in 
+    ncount = -1
+    if count >= 0:
+        ncount = 2 * count
+    else: pass
 
     # Open file in read mode
     with open(infile, 'rb') as fin:
-        dat = np.fromfile(fin, offset=offset, count=count, dtype='complex64')
+        dat = np.fromfile(fin, offset=offset, count=ncount, dtype=dtype)
 
     return dat
 
 
-def read_many_cs(infiles, start=0, count=-1, hdr_size=None):
+def read_many_cs(infiles, start=0, count=-1):
     """
     Read complex voltage data from many files
     """
     # If count is -1, read one file to get count
     if count < 0:
-        dtmp = read_cs(infiles[0], start=start, count=-1, hdr_size=hdr_size)
-        count = len(dtmp)
+        dtmp = read_cs(infiles[0], start=start, count=-1)
+        count = len(dtmp) // 2
     else: pass
 
+    # Read header from first file to get data type
+    hd, hsize, err = fb.read_header(infiles[0], 4, fb.fmtdict)
+    
+    nbits = hd['nbits']
+    if nbits == 8:
+        dtype = 'int8'
+    elif nbits == 32:
+        dtype = 'float32'
+    else:
+        print("Only supports nbits of 8 or 32")
+        print("nbits = %d invalid" %(nbits))
+        return
+    
     N = len(infiles)
-    dd_all = np.zeros( (N, count), dtype='complex64')
+    dd_all = np.zeros( (N, 2 * count), dtype=dtype)
 
     for ii in range(N):
         fii = infiles[ii]
-        dii = read_cs(fii, start=start, count=count, hdr_size=hdr_size)
+        dii = read_cs(fii, start=start, count=count)
         dd_all[ii, :] = dii[:]
-
-    # Make big for testing
-    #dd_all = np.hstack( [dd_all] * 10 )
 
     return dd_all
 
@@ -295,12 +323,12 @@ def write_dada_header(outfile, fcenter_MHz, bw_MHz, tsamp_us,
 def write_to_dada(outfile, data, fcenter_MHz, bw_MHz, tsamp_us, 
                   mjd_start, nchan, source_name=None, fac=10):
     """
-    Data in shape (Nt, Nchan)
+    Data in shape (2 * Nt, Nchan)
 
     Note: we are fixing bits per sample = 8 and npol = 1
     """
     # Check data shape
-    Nt_all = data.shape[0]
+    Nt_all = data.shape[0] // 2
     if data.shape[1] == nchan:
         pass
     else:
@@ -309,12 +337,19 @@ def write_to_dada(outfile, data, fcenter_MHz, bw_MHz, tsamp_us,
         return 0
 
     # Scale data 
-    data = data * fac
+    if data.dtype == 'float32':
+        data = data * fac
+    else: pass
 
     # Get data in the right format 
-    ddr = np.real(data.ravel()).astype('int8')
-    ddi = np.imag(data.ravel()).astype('int8')
-    dd_out = np.reshape( np.vstack( (ddr, ddi) ).T, (-1, 2 * nchan) )
+    data = np.reshape(data, (Nt_all, 2, nchan))
+    data = np.swapaxes(data, 1, 2)
+    data = np.reshape(data, (Nt_all, 2 * nchan))
+
+    if data.dtype == 'int8':
+        dd_out = data
+    else:
+        dd_out = data.astype('int8')
 
     # Write header
     hdr = write_dada_header(outfile, fcenter_MHz, bw_MHz, tsamp_us, 
@@ -331,19 +366,26 @@ def write_to_dada(outfile, data, fcenter_MHz, bw_MHz, tsamp_us,
 
 def append_to_dada(outfile, data, fac=10):
     """
-    Data in shape (Nt, Nchan)
+    Data in shape (2 * Nt, Nchan)
 
-    Note: we are fixing bits per sample = 8 and npol = 1
+    Note: we are fixing output bits per sample = 8 and npol = 1
     """
-    # Apply a scaling factor to better rep as 8-bit
-    data = data * fac
+    # Apply a scaling factor to better rep as 8-bit if float
+    if data.dtype == 'float32':
+        data = data * fac
+    else: pass
 
     nchan = data.shape[1]
-
+    
     # Get data in the right format 
-    ddr = np.real(data.ravel()).astype('int8')
-    ddi = np.imag(data.ravel()).astype('int8')
-    dd_out = np.reshape( np.vstack( (ddr, ddi) ).T, (-1, 2 * nchan) )
+    data = np.reshape(data, (-1, 2, nchan))
+    data = np.swapaxes(data, 1, 2)
+    data = np.reshape(data, (-1, 2 * nchan))
+
+    if data.dtype == 'int8':
+        dd_out = data
+    else:
+        dd_out = data.astype('int8')
 
     # Now we can append the data to this file
     with open(outfile, 'ab') as fout:
@@ -381,7 +423,7 @@ def cs2dada(basename, indir, outdir):
     else:
         pass
 
-    sfiles, freqs, src, bw, tstart, dsize = check_out
+    sfiles, freqs, src, bw, tstart, dsize, nbits = check_out
 
     # Read data (shape will be (nchan, nspec))
     dd = read_many_cs(sfiles)
@@ -429,7 +471,7 @@ def cs2dada_multipass(basename, indir, outdir, mem_lim_gb=32.0):
     else:
         pass
 
-    sfiles, freqs, src, bw, tstart, dsize = check_out
+    sfiles, freqs, src, bw, tstart, dsize, nbits = check_out
     
     # Get nec info for DADA 
     nchan = len(freqs)
@@ -437,7 +479,7 @@ def cs2dada_multipass(basename, indir, outdir, mem_lim_gb=32.0):
     fcenter_MHz = np.mean(freqs)
     tsamp_us = 1.0 / np.abs(bw)
     mjd_start = tstart
-    Nt_total = int( dsize / 8 )
+    Nt_total = int( dsize / (2 * nbits / 8) )
     
     # Write data as (nspec, nchan) shape 
     dada_out = "%s/%s.dada" %(outdir, basename)
@@ -448,7 +490,7 @@ def cs2dada_multipass(basename, indir, outdir, mem_lim_gb=32.0):
                             source_name=src)
 
     # Figure out the number of samples per file per chunk
-    Nsamp_per_chunk = int( 0.5 * 0.75 * 10**9 * mem_lim_gb / (8 * nchan) )
+    Nsamp_per_chunk = int( 0.5 * 0.75 * 10**9 * mem_lim_gb / (2 * (nbits//8) * nchan) )
 
     # How many steps to read all the data?
     nsteps = int( np.ceil( Nt_total / Nsamp_per_chunk ) )
